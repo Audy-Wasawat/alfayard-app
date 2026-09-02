@@ -1,0 +1,25 @@
+# ผลลัพธ์ PDF และภาพ preview
+output/*.pdf
+output/*.png
+
+# รูปคนจริง (ข้อมูลส่วนบุคคล — ไม่ควรขึ้น Git)
+photos/*.jpg
+photos/*.jpeg
+photos/*.png
+photos/*.JPG
+photos/*.JPEG
+photos/*.PNG
+!photos/.gitkeep
+
+# ข้อมูลผู้โดยสารจริง (ถ้าไม่อยากให้ขึ้น Git ให้ลบ # ข้างล่าง)
+# passengers.xlsx
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+
+# Gemini API key (ส่วนตัว)
+gemini_api_key.txt

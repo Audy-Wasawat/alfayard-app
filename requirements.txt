@@ -1,0 +1,10 @@
+# ใบติดกระเป๋า (สร้าง PDF)
+reportlab>=4.0
+Pillow>=9.0
+openpyxl>=3.0
+
+# สแกนพาสปอร์ต (โหมดฟรี)
+pytesseract>=0.3.10
+
+# สแกนพาสปอร์ต (โหมด Gemini ฟรีเทียร์)
+google-generativeai>=0.8
