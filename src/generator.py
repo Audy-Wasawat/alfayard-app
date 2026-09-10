@@ -49,15 +49,49 @@ def fit_font_size(text, font_name, max_width_pt, start_pt, min_pt):
     return min_pt
 
 
-def _draw_tag(c, x, y, person, base_dir, photos_dir=None, qr_path=None):
+# สระบน (อยู่เหนือพยัญชนะ) และ วรรณยุกต์/การันต์/นิคหิต (ต้องซ้อนสูงกว่าสระบน)
+_UPPER_VOWELS = set("ิีึืั็")
+_TOP_MARKS = set("่้๊๋์ํ๎")
+
+
+def _draw_text_line(c, x, y, text, font, size, color):
+    """
+    วาดข้อความ 1 บรรทัด พร้อมแก้ปัญหา reportlab ไม่จัดตำแหน่งอักขระไทยซ้อน:
+    ถ้าวรรณยุกต์/การันต์ (่ ้ ๊ ๋ ์ ...) ตามหลังสระบน (ิ ี ึ ื ั ็) ให้ยกขึ้น
+    ไม่ให้ทับกัน เช่น "ศักดิ์" (การันต์ทับสระอี), "ทั้ง", "สิทธิ์"
+    """
+    rise = size * 0.30            # ระยะยกวรรณยุกต์/การันต์ขึ้น (สัดส่วนของขนาดฟอนต์)
+    t = c.beginText(x, y)
+    t.setFont(font, size)
+    t.setFillColorRGB(*color)
+    prev = ""
+    for ch in text:
+        if ch in _TOP_MARKS and prev in _UPPER_VOWELS:
+            t.setRise(rise)
+            t.textOut(ch)
+            t.setRise(0)
+        else:
+            t.textOut(ch)
+        prev = ch
+    c.drawText(t)
+
+
+def _draw_tag(c, x, y, person, base_dir, photos_dir=None, qr_path=None, tag_h_mm=None):
     """
     วาดใบติดกระเป๋า 1 ใบ โดย (x, y) = มุมล่างซ้ายของใบ (ระบบพิกัด reportlab)
     person = dict ที่มี thai_name, english_name, passport
     photos_dir/qr_path: ระบุแหล่งรูปคน/ไฟล์ QR เองได้ (ถ้าไม่ระบุใช้ค่า default)
+    tag_h_mm: ความสูงของใบ (มม.) ถ้าไม่ระบุใช้ config.TAG_H_MM
+
+    มี 2 โหมด:
+      - มี QR   : รูปคนชิดบน แล้ววาง QR ไว้ใต้รูป (แบบเดิม)
+      - ไม่มี QR: รูปคนจัดกึ่งกลางแนวตั้งให้ตรงกับบล็อกข้อความ (สมมาตร) ใบเตี้ยลง
     """
     tw = config.TAG_W_MM * mm
-    th = config.TAG_H_MM * mm
+    th = (tag_h_mm if tag_h_mm else config.TAG_H_MM) * mm
     pad = config.PAD_MM * mm
+
+    has_qr = bool(qr_path and os.path.exists(qr_path))
 
     # เส้นขอบใบ (แนวตัด)
     if config.DRAW_CUT_BORDER:
@@ -69,12 +103,16 @@ def _draw_tag(c, x, y, person, base_dir, photos_dir=None, qr_path=None):
     inner_x = x + pad
     inner_top = y + th - pad          # ขอบบนภายใน
     inner_bottom = y + pad
+    center_y = (inner_top + inner_bottom) / 2.0
 
     # ---------- คอลัมน์ซ้าย: รูปคน ----------
     photo_w = config.PHOTO_W_MM * mm
     photo_h = config.PHOTO_H_MM * mm
     photo_x = inner_x
-    photo_y = inner_top - photo_h      # มุมล่างซ้ายของรูป
+    if has_qr:
+        photo_y = inner_top - photo_h            # ชิดบน (เว้นที่ให้ QR ด้านล่าง)
+    else:
+        photo_y = center_y - photo_h / 2.0       # จัดกึ่งกลางแนวตั้ง (สมมาตรกับข้อความ)
 
     passport = str(person.get(config.COL_PASSPORT, "")).strip()
     photo_path = find_photo_path(passport, base_dir, photos_dir) if passport else None
@@ -91,16 +129,14 @@ def _draw_tag(c, x, y, person, base_dir, photos_dir=None, qr_path=None):
     else:
         _draw_placeholder(c, photo_x, photo_y, photo_w, photo_h, "NO PHOTO")
 
-    # ---------- คอลัมน์ซ้าย: QR (ใต้รูป) ----------
-    qr_size = config.QR_SIZE_MM * mm
-    qr_x = inner_x
-    qr_y = photo_y - config.GAP_PHOTO_QR_MM * mm - qr_size
-    qr_file = qr_path if qr_path else os.path.join(base_dir, config.QR_IMAGE)
-    if qr_file and os.path.exists(qr_file):
-        c.drawImage(qr_file, qr_x, qr_y, width=qr_size, height=qr_size,
+    # ---------- คอลัมน์ซ้าย: QR (ใต้รูป) — เฉพาะเมื่อเลือกไฟล์ QR ----------
+    if has_qr:
+        qr_size = config.QR_SIZE_MM * mm
+        qr_x = inner_x
+        qr_y = photo_y - config.GAP_PHOTO_QR_MM * mm - qr_size
+        c.drawImage(qr_path, qr_x, qr_y, width=qr_size, height=qr_size,
                     preserveAspectRatio=True, mask="auto")
-    else:
-        _draw_placeholder(c, qr_x, qr_y, qr_size, qr_size, "QR")
+    # ไม่มี QR → เว้นพื้นที่ว่างไว้ (ไม่วาดอะไร)
 
     # ---------- คอลัมน์ขวา: ข้อความ ----------
     text_x = inner_x + photo_w + config.COL_GAP_MM * mm
@@ -143,9 +179,8 @@ def _draw_tag(c, x, y, person, base_dir, photos_dir=None, qr_path=None):
     for ln in lines:
         cursor -= ln.get("gap_before", 0.0)
         cursor -= ln["size"] * config.LINE_LEADING   # เลื่อนลงหนึ่งช่องบรรทัด
-        c.setFont(ln["font"], ln["size"])
-        c.setFillColorRGB(*ln["color"])
-        c.drawString(text_x, cursor, ln["text"])
+        _draw_text_line(c, text_x, cursor, ln["text"], ln["font"],
+                        ln["size"], ln["color"])
 
 
 def _draw_placeholder(c, x, y, w, h, label):
@@ -170,18 +205,28 @@ def generate_pdf(people, base_dir, output_path, photos_dir=None, qr_path=None):
     c = canvas.Canvas(output_path, pagesize=A4)
     page_w, page_h = A4
 
+    # เลือกขนาด/จำนวนแถวตามโหมด: มี QR = แบบเดิม, ไม่มี QR = ใบเตี้ย + แถวเยอะขึ้น
+    has_qr = bool(qr_path and os.path.exists(qr_path))
+    if has_qr:
+        tag_h_mm = config.TAG_H_MM
+        rows = config.ROWS
+    else:
+        tag_h_mm = getattr(config, "TAG_H_NOQR_MM", config.TAG_H_MM)
+        rows = getattr(config, "ROWS_NOQR", config.ROWS)
+    tags_per_page = config.COLS * rows
+
     tw = config.TAG_W_MM * mm
-    th = config.TAG_H_MM * mm
+    th = tag_h_mm * mm
     gx = config.GUTTER_X_MM * mm
     gy = config.GUTTER_Y_MM * mm
 
     grid_w = config.COLS * tw + (config.COLS - 1) * gx
-    grid_h = config.ROWS * th + (config.ROWS - 1) * gy
+    grid_h = rows * th + (rows - 1) * gy
     margin_x = (page_w - grid_w) / 2
     margin_y = (page_h - grid_h) / 2
 
     for i, person in enumerate(people):
-        slot = i % config.TAGS_PER_PAGE
+        slot = i % tags_per_page
         if i > 0 and slot == 0:
             c.showPage()
 
@@ -190,7 +235,7 @@ def generate_pdf(people, base_dir, output_path, photos_dir=None, qr_path=None):
         # แถวบนสุดอยู่ด้านบนของหน้า (row 0 = บนสุด)
         x = margin_x + col * (tw + gx)
         y = page_h - margin_y - (row + 1) * th - row * gy
-        _draw_tag(c, x, y, person, base_dir, photos_dir, qr_path)
+        _draw_tag(c, x, y, person, base_dir, photos_dir, qr_path, tag_h_mm)
 
     c.showPage()
     c.save()

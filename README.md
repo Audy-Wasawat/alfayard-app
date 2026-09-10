@@ -2,7 +2,7 @@
 
 # 🧳 Alfayard Passport & Bag Tag Suite
 
-**Scan passports into a spreadsheet, then generate print-ready luggage tags — all in one window.**
+**Scan passports into a spreadsheet, then generate print-ready luggage tags and passport labels — all in one window.**
 
 A lightweight desktop tool built for travel/Hajj group operators who need to turn a folder of
 passport photos into printed bag tags quickly, without paying for cloud OCR.
@@ -18,14 +18,15 @@ passport photos into printed bag tags quickly, without paying for cloud OCR.
 
 ## ✨ Overview
 
-This is a single Python/Tkinter application with **two tabs** that cover the whole workflow:
+This is a single Python/Tkinter application with **three tabs** that cover the whole workflow:
 
 | Tab | What it does | Output |
 |-----|--------------|--------|
 | **1 · Passport Scanner** | Reads a folder of passport photos and extracts Thai name, English name, and passport number | `passengers.xlsx` |
 | **2 · Bag Tag Generator** | Turns that spreadsheet + a folder of ID photos into an A4 PDF of luggage tags (8 per page) | `bagtags_<timestamp>.pdf` |
+| **3 · Passport Label Generator** | Turns that spreadsheet into an A4 PDF of passport cover labels (16 per page) **plus** a matching photo sheet to cut out and stick on each passport corner | `passport_labels_<timestamp>.pdf` + `passport_photos_<timestamp>.pdf` |
 
-When a scan finishes, the resulting Excel file is **handed straight to Tab 2 automatically** — no
+When a scan finishes, the resulting Excel file is **handed straight to Tabs 2 and 3 automatically** — no
 switching programs, no re-selecting files.
 
 ---
@@ -42,6 +43,7 @@ switching programs, no re-selecting files.
 - **Embedded Thai font (Sarabun)** so PDFs render Thai names correctly on any machine.
 - **Auto-fit typography** — long names shrink from 16pt down to fit one line.
 - **Photo matching by passport number** — name a photo `AA1234567.jpg` and it's matched automatically.
+- **Passport labels + photo sheet in one click** — Tab 3 prints the 8.4 cm cover labels (company logo, contacts, editable group leader / group number, auto-numbered `No.`) **and** a separate sheet of cut-out photos, both numbered so they match one-to-one.
 - **Everything configurable in one file** (`src/config.py`) — tag size, margins, fonts, layout.
 
 ---
@@ -92,6 +94,16 @@ python app.py
 3. QR image (optional, per event).
 4. Click **Generate PDF** → saved to `output/`.
 
+### Tab 3 — Passport Label Generator
+1. Excel file (auto-filled from Tab 1, or pick your own).
+2. Photo folder — same convention as Tab 2 (filename = passport number).
+3. Fill in the group fields (they change every round): **Grp.Leader** (free text), **Grp.Name** (defaults to `AL-FAYARD`), **Grp.No.** `No.` is numbered automatically in spreadsheet order.
+4. Click **Generate PDF (labels + photos)** → produces **two** files in `output/`:
+   - `passport_labels_<timestamp>.pdf` — the 8.4 cm cover labels (16 per A4 page), stuck along the **top** of each passport.
+   - `passport_photos_<timestamp>.pdf` — a sheet of cut-out photos (labelled with `No.` + name), stuck on the **bottom-right corner**. Missing photos show a `NO PHOTO` box so the numbering stays aligned.
+
+   Print both, cut them out, and match each label to its photo by the shared **No.**
+
 ---
 
 ## 🔑 Getting a Free Gemini API Key
@@ -126,17 +138,37 @@ All layout constants live in **`src/config.py`** (measurements in millimetres):
 | `NAME_START_PT` / `NAME_MIN_PT` | 16 / 8 | Auto-shrink name font range |
 | `COMPANY_NAME` | Alfayard 1441 Co., Ltd. | Printed on every tag |
 
+**Passport labels (Tab 3)** — `PLABEL_*` settings:
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `PLABEL_W_MM` / `PLABEL_H_MM` | 84 × 30 | Label size (8.4 cm wide) |
+| `PLABEL_COLS` / `PLABEL_ROWS` | 2 × 8 | Labels per page (16) |
+| `PLABEL_LEFT_W_MM` | 30 | Width of the logo / company column |
+| `PLABEL_LOGO_H_MM` | 13 | Logo height |
+| `PLABEL_COMPANY_NAME` / `PLABEL_EMAIL` / `PLABEL_PHONE` | ALFAYARD 1441 CO., LTD. … | Company block text |
+| `PLABEL_GRP_NAME_DEFAULT` | AL-FAYARD | Default `Grp.Name` value |
+
+**Photo sheet (Tab 3)** — `PSHEET_*` settings:
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `PSHEET_PHOTO_W_MM` / `PSHEET_PHOTO_H_MM` | 28 × 36 | Cut-out photo size |
+| `PSHEET_COLS` / `PSHEET_ROWS` | 6 × 6 | Photos per page (36) |
+| `PSHEET_CAPTION_PT` | 6 | `No.` + name caption font |
+
 ---
 
 ## 📁 Project Structure
 ```
 alfayard-app/
 ├── START.bat            # Windows launcher (installs deps + runs app)
-├── app.py               # Unified 2-tab GUI
+├── app.py               # Unified 3-tab GUI
 ├── requirements.txt
 ├── passengers.xlsx      # Example data
 ├── gemini_api_key.txt   # Saved API key (git-ignored)
 ├── assets/qr_code.png   # Default QR
+├── assets/logo.png      # Company logo (passport labels)
 ├── fonts/Sarabun-*.ttf  # Embedded Thai font
 ├── photos/              # ID photos (filename = passport no.)
 ├── output/              # Generated PDFs
@@ -146,7 +178,9 @@ alfayard-app/
     ├── excel_export.py      # Scan results → xlsx
     ├── excel_loader.py      # xlsx → people
     ├── photo.py             # Center-crop to 3:4
-    └── generator.py         # Draw the PDF
+    ├── generator.py         # Draw the bag-tag PDF
+    ├── passport_label.py    # Draw the passport-label PDF
+    └── photo_sheet.py       # Draw the cut-out photo sheet PDF
 ```
 
 ---

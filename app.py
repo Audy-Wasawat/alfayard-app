@@ -32,6 +32,8 @@ from excel_export import export_excel  # noqa
 # --- โมดูลฝั่งใบติดกระเป๋า (แพ็กเกจ src) ---
 from src.excel_loader import load_people          # noqa
 from src.generator import generate_pdf            # noqa
+from src.passport_label import generate_passport_labels  # noqa
+from src.photo_sheet import generate_photo_sheet  # noqa
 from src.photo import find_photo_path             # noqa
 from src import config                            # noqa
 
@@ -170,7 +172,7 @@ class TagTab(ttk.Frame):
         super().__init__(master)
         self.xlsx_path = tk.StringVar(value=self._default_xlsx())
         self.photos_dir = tk.StringVar(value=os.path.join(BASE_DIR, config.PHOTOS_DIR))
-        self.qr_path = tk.StringVar(value=self._default_qr())
+        self.qr_path = tk.StringVar(value="")   # เริ่มว่างเสมอ — ใส่ QR เฉพาะเมื่อกด "เลือก..." เอง
         self.people = []
         self._build()
         if os.path.exists(self.xlsx_path.get()):
@@ -292,7 +294,11 @@ class TagTab(ttk.Frame):
             n = generate_pdf(self.people, BASE_DIR, out, photos_dir=photos_dir, qr_path=qr_path)
         except Exception as e:
             messagebox.showerror("สร้าง PDF ไม่สำเร็จ", f"{e}\n\n{traceback.format_exc()}"); return
-        pages = (n + config.TAGS_PER_PAGE - 1) // config.TAGS_PER_PAGE
+        # จำนวนใบต่อหน้าต่างกันตามโหมด: มี QR = 2xROWS, ไม่มี QR = 2xROWS_NOQR
+        _has_qr = bool(qr_path and os.path.exists(qr_path))
+        _rows = config.ROWS if _has_qr else getattr(config, "ROWS_NOQR", config.ROWS)
+        _per_page = config.COLS * _rows
+        pages = (n + _per_page - 1) // _per_page
         self.status.set(f"สร้างเสร็จ: {n} ใบ / {pages} หน้า")
         if messagebox.askyesno("เสร็จแล้ว",
                                f"สร้างใบติดกระเป๋า {n} ใบ ({pages} หน้า)\n\n{out}\n\nเปิดไฟล์เลยไหม?"):
@@ -311,29 +317,205 @@ class TagTab(ttk.Frame):
 
 
 # =========================================================
-#   หน้าต่างหลัก: รวม 2 แท็บ
+#   แท็บ 3: สร้างใบติดพาสปอร์ต → PDF
+# =========================================================
+class PassportTab(ttk.Frame):
+    def __init__(self, master):
+        super().__init__(master)
+        self.xlsx_path = tk.StringVar(value=self._default_xlsx())
+        self.photos_dir = tk.StringVar(value=os.path.join(BASE_DIR, config.PHOTOS_DIR))
+        self.grp_leader = tk.StringVar(value="")
+        self.grp_name = tk.StringVar(value=getattr(config, "PLABEL_GRP_NAME_DEFAULT", "AL-FAYARD"))
+        self.grp_no = tk.StringVar(value="1")
+        self.people = []
+        self._build()
+        if os.path.exists(self.xlsx_path.get()):
+            self.reload()
+
+    def _default_xlsx(self):
+        p = os.path.join(BASE_DIR, "passengers.xlsx")
+        return p if os.path.exists(p) else ""
+
+    def _build(self):
+        pad = {"padx": 10, "pady": 5}
+        top = ttk.Frame(self); top.pack(fill="x", **pad)
+        ttk.Label(top, text="ไฟล์ Excel:", width=11).pack(side="left")
+        ttk.Entry(top, textvariable=self.xlsx_path).pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Button(top, text="เลือก...", command=self.browse).pack(side="left")
+        ttk.Button(top, text="โหลดใหม่", command=self.reload).pack(side="left", padx=4)
+
+        prow = ttk.Frame(self); prow.pack(fill="x", padx=10)
+        ttk.Label(prow, text="โฟลเดอร์รูป:", width=11).pack(side="left")
+        ttk.Entry(prow, textvariable=self.photos_dir).pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Button(prow, text="เลือก...", command=self.browse_photos).pack(side="left")
+
+        # ---- ช่องที่แก้ได้ก่อนสร้าง (แต่ละรอบไม่เหมือนกัน) ----
+        box = ttk.LabelFrame(self, text="ข้อมูลกลุ่ม (แก้ได้ก่อนสร้าง — เหมือนกันทุกใบ)")
+        box.pack(fill="x", padx=10, pady=6)
+        g1 = ttk.Frame(box); g1.pack(fill="x", padx=8, pady=4)
+        ttk.Label(g1, text="Grp.Leader (ผู้นำกลุ่ม):", width=20).pack(side="left")
+        ttk.Entry(g1, textvariable=self.grp_leader).pack(side="left", fill="x", expand=True, padx=6)
+        g2 = ttk.Frame(box); g2.pack(fill="x", padx=8, pady=4)
+        ttk.Label(g2, text="Grp.Name:", width=20).pack(side="left")
+        ttk.Entry(g2, textvariable=self.grp_name, width=22).pack(side="left", padx=6)
+        ttk.Label(g2, text="Grp.No.:").pack(side="left", padx=(12, 0))
+        ttk.Entry(g2, textvariable=self.grp_no, width=8).pack(side="left", padx=6)
+        ttk.Label(box, text="No. เรียงตามลำดับรายชื่อใน Excel อัตโนมัติ (1, 2, 3, ...)",
+                  foreground="#888").pack(anchor="w", padx=8, pady=(0, 4))
+
+        mid = ttk.Frame(self); mid.pack(fill="both", expand=True, **pad)
+        cols = ("no", "name", "passport", "photo")
+        self.tree = ttk.Treeview(mid, columns=cols, show="headings", height=10)
+        for c, txt, w in [("no", "No.", 45), ("name", "Name (ชื่อบนใบติด)", 290),
+                          ("passport", "พาสปอร์ต", 100), ("photo", "รูป", 50)]:
+            self.tree.heading(c, text=txt); self.tree.column(c, width=w, anchor="w")
+        self.tree.column("no", anchor="center"); self.tree.column("photo", anchor="center")
+        vsb = ttk.Scrollbar(mid, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        self.tree.pack(side="left", fill="both", expand=True); vsb.pack(side="right", fill="y")
+        self.tree.tag_configure("missing", foreground="#c0392b")
+
+        bottom = ttk.Frame(self); bottom.pack(fill="x", **pad)
+        self.status = tk.StringVar(value="ยังไม่ได้โหลดข้อมูล")
+        ttk.Label(bottom, textvariable=self.status).pack(side="left")
+        ttk.Button(bottom, text="สร้าง PDF (ใบติด + แผ่นรูป)", command=self.generate).pack(side="right")
+
+    def set_excel(self, path):
+        """เรียกจากแท็บสแกน: ตั้งไฟล์ Excel ใหม่แล้วโหลดตาราง"""
+        self.xlsx_path.set(path)
+        self.reload()
+
+    def browse(self):
+        p = filedialog.askopenfilename(title="เลือกไฟล์ Excel",
+                                       filetypes=[("Excel", "*.xlsx"), ("ทุกไฟล์", "*.*")], initialdir=BASE_DIR)
+        if p:
+            self.xlsx_path.set(p); self.reload()
+
+    def browse_photos(self):
+        d = filedialog.askdirectory(title="เลือกโฟลเดอร์รูปคน (ชื่อไฟล์ = เลขพาสปอร์ต)",
+                                    initialdir=self.photos_dir.get() or BASE_DIR)
+        if d:
+            self.photos_dir.set(d)
+            if self.people:
+                self.reload()
+
+    def reload(self):
+        path = self.xlsx_path.get().strip()
+        if not path or not os.path.exists(path):
+            messagebox.showwarning("ไม่พบไฟล์", "กรุณาเลือกไฟล์ Excel ที่มีอยู่จริง"); return
+        try:
+            people, warnings = load_people(path)
+        except Exception as e:
+            messagebox.showerror("อ่านไฟล์ไม่ได้", str(e)); return
+        self.people = people
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        photos_dir = self.photos_dir.get().strip() or None
+        missing_name = 0
+        missing_photo = 0
+        for i, p in enumerate(people, start=1):
+            name = (p.get(config.COL_ENGLISH) or "").strip() or (p.get(config.COL_THAI) or "").strip()
+            passport = p.get(config.COL_PASSPORT, "")
+            if not name:
+                missing_name += 1
+            has_photo = bool(passport) and find_photo_path(passport, BASE_DIR, photos_dir)
+            if not has_photo:
+                missing_photo += 1
+            tag = () if (name and has_photo) else ("missing",)
+            self.tree.insert("", "end", tags=tag,
+                             values=(i, name or "(ไม่มีชื่อ)", passport, "OK" if has_photo else "X"))
+        msg = f"โหลดแล้ว {len(people)} คน"
+        if missing_name:
+            msg += f"  |  ไม่มีชื่อ {missing_name}"
+        if missing_photo:
+            msg += f"  |  ไม่พบรูป {missing_photo} (แถวสีแดง)"
+        self.status.set(msg)
+
+    def generate(self):
+        if not self.people:
+            messagebox.showwarning("ไม่มีข้อมูล", "กรุณาโหลดข้อมูลจาก Excel ก่อน"); return
+        os.makedirs(os.path.join(BASE_DIR, config.OUTPUT_DIR), exist_ok=True)
+        default_name = f"passport_labels_{datetime.now():%Y%m%d_%H%M%S}.pdf"
+        out = filedialog.asksaveasfilename(title="บันทึก PDF", defaultextension=".pdf",
+                                           initialfile=default_name,
+                                           initialdir=os.path.join(BASE_DIR, config.OUTPUT_DIR),
+                                           filetypes=[("PDF", "*.pdf")])
+        if not out:
+            return
+        photos_dir = self.photos_dir.get().strip() or None
+        # ไฟล์แผ่นรูป: ตั้งชื่อคู่กับไฟล์ใบติด (labels -> photos) วางโฟลเดอร์เดียวกัน
+        base, ext = os.path.splitext(out)
+        if "labels" in os.path.basename(base):
+            photo_out = base.replace("labels", "photos") + ext
+        else:
+            photo_out = base + "_photos" + ext
+        try:
+            n = generate_passport_labels(
+                self.people, BASE_DIR, out,
+                grp_leader=self.grp_leader.get().strip(),
+                grp_name=self.grp_name.get().strip() or "AL-FAYARD",
+                grp_no=self.grp_no.get().strip() or "1")
+            n_ph, missing = generate_photo_sheet(
+                self.people, BASE_DIR, photo_out, photos_dir=photos_dir)
+        except Exception as e:
+            messagebox.showerror("สร้าง PDF ไม่สำเร็จ", f"{e}\n\n{traceback.format_exc()}"); return
+        per_page = config.PLABEL_COLS * config.PLABEL_ROWS
+        pages = (n + per_page - 1) // per_page
+        ph_per = config.PSHEET_COLS * config.PSHEET_ROWS
+        ph_pages = (n_ph + ph_per - 1) // ph_per
+        self.status.set(f"เสร็จ: ใบติด {n} ใบ/{pages} หน้า | แผ่นรูป {n_ph} รูป/{ph_pages} หน้า"
+                        + (f" | ไม่พบรูป {missing}" if missing else ""))
+        warn = f"\n\n⚠ ไม่พบรูป {missing} คน (ช่องนั้นจะเป็นกรอบ NO PHOTO)" if missing else ""
+        if messagebox.askyesno("เสร็จแล้ว",
+                               f"สร้าง 2 ไฟล์แล้ว:\n\n"
+                               f"1) ใบติดพาสปอร์ต: {n} ใบ ({pages} หน้า)\n   {out}\n\n"
+                               f"2) แผ่นรวมรูป: {n_ph} รูป ({ph_pages} หน้า)\n   {photo_out}{warn}\n\n"
+                               f"เปิดไฟล์ใบติดเลยไหม?"):
+            self._open_file(out)
+            self._open_file(photo_out)
+
+    def _open_file(self, path):
+        try:
+            if sys.platform == "darwin":
+                os.system(f'open "{path}"')
+            elif os.name == "nt":
+                os.startfile(path)  # type: ignore
+            else:
+                os.system(f'xdg-open "{path}"')
+        except Exception:
+            pass
+
+
+# =========================================================
+#   หน้าต่างหลัก: รวม 3 แท็บ
 # =========================================================
 class MainApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Alfayard 1441 — สแกนพาสปอร์ต + ใบติดกระเป๋า")
-        self.geometry("700x640")
-        self.minsize(600, 560)
+        self.title("Alfayard 1441 — สแกนพาสปอร์ต + ใบติดกระเป๋า + ใบติดพาสปอร์ต")
+        self.geometry("720x680")
+        self.minsize(620, 580)
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=6, pady=6)
 
         self.tag_tab = TagTab(nb)
+        self.passport_tab = PassportTab(nb)
         self.scan_tab = ScanTab(nb, on_excel_ready=self._excel_ready)
 
         nb.add(self.scan_tab, text="  1) สแกนพาสปอร์ต → Excel  ")
         nb.add(self.tag_tab, text="  2) สร้างใบติดกระเป๋า → PDF  ")
+        nb.add(self.passport_tab, text="  3) สร้างใบติดพาสปอร์ต → PDF  ")
         self.nb = nb
 
     def _excel_ready(self, path):
-        """สแกนเสร็จ → ป้อน Excel ให้แท็บใบติดกระเป๋า แล้วสลับไปแท็บนั้น"""
+        """สแกนเสร็จ → ป้อน Excel ให้แท็บใบติดกระเป๋า + ใบติดพาสปอร์ต แล้วสลับไปแท็บใบติดกระเป๋า"""
         try:
             self.tag_tab.set_excel(path)
+            try:
+                self.passport_tab.set_excel(path)
+            except Exception:
+                pass
             self.nb.select(self.tag_tab)
         except Exception:
             pass
